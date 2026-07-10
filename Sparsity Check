@@ -1,0 +1,97 @@
+import pandas as pd
+
+# ═══════════════════════════════════════════════════════════════════════════
+# STANDALONE EDA SCRIPT — loads its own data, no dependency on other scripts.
+# Just run this file top to bottom by itself.
+# ═══════════════════════════════════════════════════════════════════════════
+
+# ── 1. Load pricing data ───────────────────────────────────────────────────
+df_pricing = pd.read_excel(r"D:\Project Data Garbage\MSOS_MSOX.xlsx")
+df_pricing["Date"] = pd.to_datetime(df_pricing["Date"]).dt.normalize()
+df_pricing = df_pricing.sort_values("Date")
+df_pricing["Daily_Return"] = df_pricing["Last Price"].pct_change()
+
+# ── 2. Load options data ───────────────────────────────────────────────────
+base = r"D:\Project Data Garbage\MSOX\extracted"
+df_full = pd.read_excel(f"{base}\\MSOX filtered merged.xlsx")
+df_full["ts_event"]   = pd.to_datetime(df_full["ts_event"])
+df_full["expiration"] = pd.to_datetime(df_full["expiration"])
+
+# ═══════════════════════════════════════════════════════════════════════════
+# EDA CHECKS
+# ═══════════════════════════════════════════════════════════════════════════
+
+print("=" * 70)
+print("1. PER-SYMBOL COVERAGE (actual obs vs. expected business days)")
+print("=" * 70)
+
+coverage = df_full.groupby("symbol").agg(
+    first_seen=("ts_event", "min"),
+    last_seen=("ts_event", "max"),
+    n_obs=("ts_event", "count"),
+)
+coverage["expected_bdays"] = coverage.apply(
+    lambda r: len(pd.bdate_range(r["first_seen"], r["last_seen"])), axis=1
+)
+coverage["coverage_pct"] = coverage["n_obs"] / coverage["expected_bdays"]
+
+print(coverage["coverage_pct"].describe())
+print("\nWorst-covered symbols (lowest coverage %):")
+print(coverage.sort_values("coverage_pct").head(15)[
+    ["first_seen", "last_seen", "n_obs", "expected_bdays", "coverage_pct"]
+])
+
+print("\n" + "=" * 70)
+print("2. VOLUME SPARSITY")
+print("=" * 70)
+
+if "volume" in df_full.columns:
+    print(df_full["volume"].describe())
+    zero_vol_pct = (df_full["volume"] == 0).mean()
+    thin_vol_pct = (df_full["volume"] < 10).mean()
+    print(f"\n% rows with ZERO volume: {zero_vol_pct:.2%}")
+    print(f"% rows with volume < 10: {thin_vol_pct:.2%}")
+else:
+    print("No 'volume' column found — skipping.")
+
+print("\n" + "=" * 70)
+print("3. LARGEST GAP (days) WITHIN EACH SYMBOL'S TIMELINE")
+print("=" * 70)
+
+def max_gap_days(dates):
+    d = pd.Series(sorted(pd.to_datetime(dates)))
+    if len(d) < 2:
+        return 0
+    return d.diff().dt.days.max()
+
+gaps = df_full.groupby("symbol")["ts_event"].apply(max_gap_days)
+print(gaps.describe())
+print("\nSymbols with the biggest single gaps:")
+print(gaps.sort_values(ascending=False).head(15))
+
+print("\n" + "=" * 70)
+print("4. OVERALL DATASET DENSITY")
+print("=" * 70)
+
+total_symbols = df_full["symbol"].nunique()
+total_rows = len(df_full)
+date_span_days = (df_full["ts_event"].max() - df_full["ts_event"].min()).days
+
+print(f"Total symbols:        {total_symbols}")
+print(f"Total rows:           {total_rows}")
+print(f"Date span (days):     {date_span_days}")
+print(f"Avg rows per symbol:  {total_rows / total_symbols:.1f}")
+print(f"Expected business days in span: "
+      f"{len(pd.bdate_range(df_full['ts_event'].min(), df_full['ts_event'].max()))}")
+
+print("\n" + "=" * 70)
+print("5. OUTLIER DAILY RETURNS ON UNDERLYING (possible data errors)")
+print("=" * 70)
+
+print(df_pricing["Daily_Return"].describe())
+print("\nTop 10 largest absolute daily moves (check these manually):")
+print(df_pricing["Daily_Return"].abs().sort_values(ascending=False).head(10))
+
+print("\n" + "=" * 70)
+print("EDA COVERAGE CHECK COMPLETE")
+print("=" * 70)
