@@ -1,0 +1,47 @@
+import pandas as pd
+import re
+
+# ── 1. Parse symbol info from DBN ──────────────────────────────────────────
+df_dbn = df.copy()
+df_dbn.index = df_dbn.index.tz_localize(None) if df_dbn.index.tzinfo else df_dbn.index
+
+# Fixed parser — captures date BEFORE the C/P letter
+def parse_symbol(symbol):
+    symbol_clean = symbol.replace(" ", "")
+    match = re.search(r'(\d{6})([CP])', symbol_clean)
+    if match:
+        date_str = match.group(1)   # e.g. '230818'
+        opt_type = match.group(2)   # 'C' or 'P'
+        exp_date = pd.to_datetime(date_str, format="%y%m%d")
+        return opt_type, exp_date
+    return None, None
+
+df_dbn[["option_type", "expiration"]] = df_dbn["symbol"].apply(
+    lambda s: pd.Series(parse_symbol(s))
+)
+
+# ── 2. Filter: Calls only + DTE 15–180 ─────────────────────────────────────
+df_dbn["dte"] = (df_dbn["expiration"] - df_dbn.index.to_series()).dt.days
+
+df_filtered = df_dbn[
+    (df_dbn["option_type"] == "C") &
+    (df_dbn["dte"] >= 15) &
+    (df_dbn["dte"] <= 180)
+].copy()
+
+# ── 3. Normalize dates for merging ─────────────────────────────────────────
+df_filtered.index = pd.to_datetime(df_filtered.index).normalize()
+df_pricing["Date"] = pd.to_datetime(df_pricing["Date"]).dt.normalize()
+df_pricing = df_pricing.set_index("Date")
+
+# ── 4. Merge on overlapping dates ──────────────────────────────────────────
+df_combined = df_filtered.join(df_pricing, how="inner")
+
+print(f"Rows after filter + merge: {len(df_combined)}")
+print(f"Date range: {df_combined.index.min()} -> {df_combined.index.max()}")
+print(df_combined.head())
+
+# ── 5. Save ────────────────────────────────────────────────────────────────
+output_path = r"D:\Project Data Garbage\MSOX\extracted\MSOX filtered.xlsx"
+df_combined.to_excel(output_path, index=True)
+print(f"Saved to: {output_path}")
